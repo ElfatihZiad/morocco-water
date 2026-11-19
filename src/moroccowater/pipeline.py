@@ -68,14 +68,14 @@ def _measure_batch(items, reservoir, aoi, offsets, runlog, chunks) -> pd.DataFra
     """
     ds = load_scenes(items, reservoir, runlog, geobox=aoi.odc.geobox, chunks=chunks)
     ds = to_reflectance(ds, offsets, runlog)
+    # Mask first, then check: the radiometry check must judge usable pixels, not
+    # cloud tops, which legitimately exceed 1.0 reflectance.
+    valid = valid_mask(ds)
     with rasterio.Env(**GDAL_ENV), dask.config.set(
         scheduler="threads", num_workers=IO_THREADS
     ):
-        # Sample several scenes, not one: a single empty scene is no longer
-        # fatal, so a wider sample is both safe and a better check.
-        checks.check_reflectance_range(ds, ["B03", "B08", "B11"], sample=3)
+        checks.check_reflectance_range(ds, ["B03", "B08", "B11"], valid=valid, sample=3)
 
-    valid = valid_mask(ds)
     idx = water.compute_indices(ds)
     masks = {
         "combined": water.water_mask_combined(idx),  # Bounif et al., validated here

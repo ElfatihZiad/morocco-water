@@ -417,3 +417,61 @@ whose failure mode is *discarding valid data* is its own kind of silent error.
 The abort was logged and isolated per batch, so nothing looked broken; the series
 simply had holes. A check needs to distinguish "this data is wrong" from "this
 data is absent", and only the first is a fault.
+
+---
+
+## 2026-11-19 — The radiometry check must judge usable pixels, not cloud
+
+**Second bug in the same check.** After the empty-scene fix, four more months
+still failed with `B03: reflectance outside [-0.1, 1.6] (max=1.641)`. The bound
+looked too tight, and the tempting fix was to widen it.
+
+**Diagnosing instead of widening.** For 2017-03, the one available scene has a
+**median** B03 of 1.036, with 57% of pixels above 1.0 and a maximum of 1.681.
+That is not a reservoir; it is a scene that is almost entirely thick cloud. Cloud
+tops legitimately exceed 1.0 reflectance. The data was fine and the check was
+looking at the wrong pixels.
+
+**Fix.** `check_reflectance_range` now takes the SCL-derived `valid` mask and
+judges only usable pixels, on **percentiles** (p0.1, p99.9) rather than extremes,
+with a looser absolute bound to catch gross scale errors. A fully-clouded scene
+then has no usable pixels, counts as empty, and is dropped by the `valid_frac`
+gate as intended.
+
+This makes the check *more* sensitive, not less: a misapplied offset drives the
+dark end negative, and that signal was previously swamped by cloud outliers.
+
+**Lesson.** When a sanity check fires on data you believe is good, the first move
+is to find out what the data actually looks like, not to relax the threshold.
+Here the measured distribution said "this is a cloud", which pointed at the real
+defect — the check was running before masking rather than after.
+
+---
+
+## 2026-11-19 — Cascade reservoirs added; flow topology deliberately unverified
+
+Added Bin el Ouidane, Hassan I and Ait Aadel. Each dam's published coordinate
+matches a GloLakes/HydroLAKES centroid to within ~100 m, which is independent
+corroboration that we are pointing at the right water body — and it corrected a
+wrong guess: hylak_id 175448 is **Hassan I**, not Ahmed El Hansali as earlier
+assumed. GloLakes also publishes storage for these upstream dams but not for Al
+Massira, so they double as free validation.
+
+**`drains_to` and `topology_verified` default to unverified, and the budget must
+refuse to run without them.** El Abid, Lakhdar and Tessaout are all confirmed
+left-bank Oum Er-Rbia tributaries joining from the south, but no source
+consulted establishes whether the Lakhdar and Tessaout confluences lie **upstream
+or downstream of Al Massira**. That distinction decides the whole attribution: a
+reservoir downstream of Al Massira cannot contribute to its inflow, and assuming
+otherwise would silently invert the result.
+
+Measuring these reservoirs is safe and useful regardless; *budgeting* needs the
+topology. Establishing it is its own task — flow accumulation over the Copernicus
+DEM (on Planetary Computer) or HydroSHEDS/HydroBASINS routing.
+
+**Ahmed El Hansali is deliberately NOT configured.** It is the main-stem
+reservoir immediately upstream of Al Massira, so it matters most of the four, and
+it has no Wikipedia article in English or French. Sources place it on the upper
+Oum Er-Rbia near Zaouiat Ech Cheikh, ~50 km from Kasba Tadla, 740 Mm3 gross and
+~473 Mm3 regulated, commissioned 2003 — but no verifiable coordinate was found. A
+mislabelled reservoir in a published dataset is worse than an absent one.

@@ -102,11 +102,29 @@ def test_reflectance_range_check_catches_unapplied_offset():
     """An un-offset post-2022 scene reads ~0.1 too high; a double-applied one
     goes far negative. Both must trip the range check."""
     ds = xr.Dataset({
-        "B03": xr.DataArray(np.full((1, 2, 2), -0.5, dtype="float32"),
+        "B03": xr.DataArray(np.full((1, 4, 4), -0.5, dtype="float32"),
                             dims=("time", "y", "x")),
     })
     with pytest.raises(checks.SanityError, match="outside"):
         checks.check_reflectance_range(ds, ["B03"])
+
+
+def test_reflectance_check_ignores_cloud_when_given_the_valid_mask():
+    """A fully-clouded scene has a median above 1.0 and a max near 1.7 -- all
+    legitimate. Judged on every pixel it is rejected; judged on usable pixels it
+    passes. This exact case cost four months of the Al Massira series."""
+    cloud = np.full((1, 8, 8), 1.7, dtype="float32")  # real clouded scenes reach ~1.7
+    cloud[0, 0, :] = 0.05  # a strip of clear water
+    ds = xr.Dataset({"B03": xr.DataArray(cloud, dims=("time", "y", "x"))})
+
+    with pytest.raises(checks.SanityError):
+        checks.check_reflectance_range(ds, ["B03"])  # no mask: cloud dominates
+
+    valid = xr.DataArray(
+        np.repeat((np.arange(8) == 0)[None, :, None], 8, axis=2),
+        dims=("time", "y", "x"),
+    )
+    checks.check_reflectance_range(ds, ["B03"], valid=valid)  # must not raise
 
 
 def test_monthly_leaves_gaps_as_gaps():
@@ -182,8 +200,8 @@ def test_reflectance_check_tolerates_a_single_empty_scene():
     """An edge-of-orbit or fully-clouded scene carries no valid pixel over the
     AOI. That is normal and must not abort the batch -- it cost 11% of the
     Al Massira series when it did."""
-    good = np.full((1, 2, 2), 0.05, dtype="float32")
-    empty = np.full((1, 2, 2), np.nan, dtype="float32")
+    good = np.full((1, 4, 4), 0.05, dtype="float32")
+    empty = np.full((1, 4, 4), np.nan, dtype="float32")
     ds = xr.Dataset({
         "B03": xr.DataArray(np.concatenate([empty, good]), dims=("time", "y", "x")),
     })
@@ -192,17 +210,17 @@ def test_reflectance_check_tolerates_a_single_empty_scene():
 
 def test_reflectance_check_still_fails_when_every_scene_is_empty():
     ds = xr.Dataset({
-        "B03": xr.DataArray(np.full((2, 2, 2), np.nan, dtype="float32"),
+        "B03": xr.DataArray(np.full((2, 4, 4), np.nan, dtype="float32"),
                             dims=("time", "y", "x")),
     })
-    with pytest.raises(checks.SanityError, match="every one of"):
+    with pytest.raises(checks.SanityError, match="none of the"):
         checks.check_reflectance_range(ds, ["B03"], sample=2)
 
 
 def test_reflectance_check_still_catches_a_bad_offset_past_an_empty_scene():
     """The out-of-range test must survive being preceded by an empty scene."""
-    empty = np.full((1, 2, 2), np.nan, dtype="float32")
-    bad = np.full((1, 2, 2), -0.5, dtype="float32")
+    empty = np.full((1, 4, 4), np.nan, dtype="float32")
+    bad = np.full((1, 4, 4), -0.5, dtype="float32")
     ds = xr.Dataset({
         "B03": xr.DataArray(np.concatenate([empty, bad]), dims=("time", "y", "x")),
     })

@@ -51,6 +51,13 @@ class Reservoir:
     capacity_mm3: float | None = None
     notes: str = ""
     sources: tuple[str, ...] = field(default_factory=tuple)
+    # Flow topology: the slug of the reservoir this one drains into, or None when
+    # the relationship has not been established. None is NOT "it drains nowhere";
+    # it means unverified, and the cascade budget must refuse to run on it. A
+    # reservoir that actually sits downstream of Al Massira cannot contribute to
+    # its inflow, and assuming otherwise would silently invert the attribution.
+    drains_to: str | None = None
+    topology_verified: bool = False
 
 
 AL_MASSIRA = Reservoir(
@@ -84,7 +91,98 @@ AL_MASSIRA = Reservoir(
     ),
 )
 
-RESERVOIRS = {r.slug: r for r in (AL_MASSIRA,)}
+# --- Upstream Oum Er-Rbia cascade -------------------------------------------
+#
+# These exist to answer the attribution question in docs/novelty.md: ~690 Mm3 was
+# reportedly transferred into Al Massira from "ouvrages en amont" between Sep 2025
+# and Jul 2026, against a total storage gain of ~984 Mm3. Measuring Al Massira
+# alone cannot distinguish rainfall from redistribution.
+#
+# Coordinates are cross-validated: each dam's published coordinate matches a
+# GloLakes/HydroLAKES centroid, which is independent corroboration that we are
+# pointing at the right water body. GloLakes also publishes storage series for
+# these upstream dams but NOT for Al Massira, so they double as free validation.
+
+BIN_EL_OUIDANE = Reservoir(
+    name="Bin el Ouidane",
+    slug="bin_el_ouidane",
+    bbox=(-6.75, 31.90, -6.20, 32.30),
+    dam_lonlat=(-6.46361, 32.10667),  # en.wikipedia 32deg06'24"N 06deg27'49"W
+    # ASSUMPTION: bbox stand-in for the El Abid headwaters in the High Atlas.
+    catchment_bbox=(-6.60, 31.60, -5.90, 32.20),
+    epsg=32629,
+    resolution=60.0,
+    max_area_km2=None,  # no published observed maximum found
+    capacity_mm3=1500.0,
+    notes=(
+        "On the El Abid, a left-bank Oum Er-Rbia tributary. Completed 1953. "
+        "Capacity figures CONFLICT across sources: 1500 (en.wikipedia), 1253, "
+        "and 1215.5 Mm3. Resolve before using capacity in any budget."
+    ),
+    sources=(
+        "en.wikipedia Bin el Ouidane Dam: 32.10667N 6.46361W, 1500 Mm3, 1953",
+        "structurae.net: 32.10670N 6.46389W (~30 m from the Wikipedia value)",
+        "GloLakes/HydroLAKES hylak_id=15136 centroid 32.1057N 6.4627W (match)",
+    ),
+)
+
+HASSAN_I = Reservoir(
+    name="Hassan I",
+    slug="hassan_i",
+    bbox=(-7.05, 31.65, -6.60, 31.98),
+    dam_lonlat=(-6.82278, 31.81444),  # en.wikipedia 31deg48'52"N 06deg49'22"W
+    # ASSUMPTION: bbox stand-in for the Lakhdar headwaters.
+    catchment_bbox=(-7.10, 31.30, -6.60, 31.85),
+    epsg=32629,
+    resolution=60.0,
+    max_area_km2=None,
+    capacity_mm3=273.0,
+    notes=(
+        "On the Lakhdar, a left-bank Oum Er-Rbia tributary, ~19 km NE of "
+        "Demnate. Completed 1986. fr.wikipedia gives a latitude 2 arcsec "
+        "(~60 m) south of the English value; immaterial at 60 m pixels."
+    ),
+    sources=(
+        "en.wikipedia Hassan I Dam: 31.81444N 6.82278W, 273 Mm3, 1986",
+        "GloLakes/HydroLAKES hylak_id=175448 centroid 31.8153N 6.8217W (match)",
+    ),
+)
+
+AIT_AADEL = Reservoir(
+    name="Ait Aadel",
+    slug="ait_aadel",
+    bbox=(-7.45, 31.50, -7.05, 31.80),
+    # This is a GloLakes lake CENTROID, not a dam wall -- which is actually the
+    # better anchor for isolate_reservoir, since a centroid is certainly water
+    # whereas a dam wall is not.
+    dam_lonlat=(-7.2607, 31.6431),
+    # ASSUMPTION: bbox stand-in for the Tessaout headwaters.
+    catchment_bbox=(-7.50, 31.20, -7.00, 31.70),
+    epsg=32629,
+    resolution=60.0,
+    max_area_km2=None,
+    capacity_mm3=None,  # not found in any source consulted
+    notes=(
+        "On the Tessaout, a left-bank Oum Er-Rbia tributary. No Wikipedia "
+        "article found in English or French; capacity and completion year "
+        "unknown. Named 'Lac des Ait-Aadel' in HydroLAKES, which is how it was "
+        "identified at all."
+    ),
+    sources=("GloLakes/HydroLAKES hylak_id=175486 'Lac des Ait-Aadel', "
+             "centroid 31.6431N 7.2607W",),
+)
+
+# NOT YET CONFIGURED: Ahmed El Hansali, on the Oum Er-Rbia MAIN STEM near Zaouiat
+# Ech Cheikh (~50 km from Kasba Tadla), 740 Mm3 gross / ~473 Mm3 regulated,
+# commissioned 2003. It is the single most important dam for the cascade budget,
+# being the main-stem reservoir immediately upstream of Al Massira -- and it has
+# no Wikipedia article in either language, so no coordinate could be verified.
+# Until one is, configuring it would mean guessing, and a mislabelled reservoir
+# in a published dataset is worse than an absent one. See docs/decisions.md.
+
+RESERVOIRS = {
+    r.slug: r for r in (AL_MASSIRA, BIN_EL_OUIDANE, HASSAN_I, AIT_AADEL)
+}
 
 # Quality gates, with rationale.
 MAX_SCENE_CLOUD_COVER = 60.0   # tile-level prefilter; AOI-level check is stricter
