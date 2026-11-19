@@ -1,0 +1,38 @@
+# Data — never committed; see CLAUDE.md
+data/
+*.tif
+*.tiff
+*.nc
+*.zarr/
+*.parquet
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Dask / odc caches
+dask-worker-space/
+.cache/
+
+# Outputs
+outputs/
+figures/
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
