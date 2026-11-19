@@ -28,18 +28,42 @@ def check_reflectance_range(ds: xr.Dataset, bands: list[str], sample: int = 3) -
     Allows -0.1..1.6: slightly negative over dark water after offset correction
     is normal, and bright cloud tops exceed 1.0. Values far outside mean the
     offset or scale was applied wrongly.
+
+    An individual all-NaN scene is NOT an error. Sentinel-2 scenes clipped at the
+    edge of an orbit, or wholly cloud-masked, legitimately carry no valid pixel
+    over the AOI; they come through with valid_frac 0 and are dropped by the
+    monthly aggregation. Treating one as fatal aborted the whole month and cost
+    11% of the Al Massira series, including both months of the 2026 recovery.
+    Only a batch in which *every* sampled scene is empty indicates a real fault.
     """
     for band in bands:
-        da = ds[band].isel(time=slice(0, sample))
-        lo, hi = (float(v) for v in (da.min(), da.max()))
-        if np.isnan(lo) and np.isnan(hi):
-            raise SanityError(f"{band}: all-NaN in the first {sample} scenes")
-        if lo < -0.1 or hi > 1.6:
+        da = ds[band].isel(time=slice(0, max(sample, 1)))
+        n_time = da.sizes.get("time", 1)
+        n_empty, seen = 0, False
+
+        for i in range(n_time):
+            slab = da.isel(time=i) if "time" in da.dims else da
+            lo, hi = (float(v) for v in (slab.min(), slab.max()))
+            if np.isnan(lo) or np.isnan(hi):
+                n_empty += 1
+                continue
+            seen = True
+            if lo < -0.1 or hi > 1.6:
+                raise SanityError(
+                    f"{band}: reflectance outside [-0.1, 1.6] (min={lo:.3f}, "
+                    f"max={hi:.3f}) -- offset/scale almost certainly misapplied"
+                )
+            logger.info("%s scene %d reflectance range ok: %.3f..%.3f", band, i, lo, hi)
+
+        if not seen:
             raise SanityError(
-                f"{band}: reflectance outside [-0.1, 1.6] (min={lo:.3f}, "
-                f"max={hi:.3f}) -- offset/scale almost certainly misapplied"
+                f"{band}: every one of the {n_time} sampled scene(s) is all-NaN "
+                "over the AOI -- check the geobox, the AOI mask and the offset"
             )
-        logger.info("%s reflectance range ok: %.3f..%.3f", band, lo, hi)
+        if n_empty:
+            logger.info("%s: %d of %d sampled scene(s) empty over the AOI "
+                        "(kept; they will be dropped by the valid_frac gate)",
+                        band, n_empty, n_time)
 
 
 def check_index_range(idx: xr.Dataset, names=("ndwi", "mndwi", "ndvi")) -> None:

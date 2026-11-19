@@ -392,3 +392,28 @@ compared against when the read happens, not when the URL is built.
   the COGs' internal overviews and is far cheaper, with shoreline precision as
   the trade. The plan is a coarse pass over the full decade plus a 20 m pass
   where precision matters, with the two compared on a common year.
+
+---
+
+## 2026-11-19 — An empty scene is not an error
+
+**Bug.** `check_reflectance_range` sampled the first scene of each monthly batch
+and raised `SanityError` if it was all-NaN. Sentinel-2 scenes clipped at the
+edge of an orbit, or wholly cloud-masked, legitimately contain no valid pixel
+over the AOI — so one such scene aborted the entire month.
+
+**Cost: 11% of the series.** 14 of 131 monthly batches failed, among them
+**2026-01 and 2026-02** — both inside the recovery the project is about.
+
+**Fix.** The check now examines several scenes, skips empty ones, and raises only
+if *every* sampled scene is empty (which would indicate a wrong geobox, mask or
+offset, and is worth failing on). Empty scenes need no special handling
+downstream: they come through with `valid_frac` 0 and are already excluded by the
+monthly aggregation's gate.
+
+**Lesson, and it cuts against the project's own rules.** CLAUDE.md says checks
+should "fail loudly, not quietly produce a plot", and that is right — but a check
+whose failure mode is *discarding valid data* is its own kind of silent error.
+The abort was logged and isolated per batch, so nothing looked broken; the series
+simply had holes. A check needs to distinguish "this data is wrong" from "this
+data is absent", and only the first is a fault.

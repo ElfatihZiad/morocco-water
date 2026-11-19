@@ -71,7 +71,9 @@ def _measure_batch(items, reservoir, aoi, offsets, runlog, chunks) -> pd.DataFra
     with rasterio.Env(**GDAL_ENV), dask.config.set(
         scheduler="threads", num_workers=IO_THREADS
     ):
-        checks.check_reflectance_range(ds, ["B03", "B08", "B11"], sample=1)
+        # Sample several scenes, not one: a single empty scene is no longer
+        # fatal, so a wider sample is both safe and a better check.
+        checks.check_reflectance_range(ds, ["B03", "B08", "B11"], sample=3)
 
     valid = valid_mask(ds)
     idx = water.compute_indices(ds)

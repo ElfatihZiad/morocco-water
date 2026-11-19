@@ -176,3 +176,35 @@ def test_volume_describe_flags_unverified_coefficients():
     d = volume.describe()
     assert d["coefficients_verified"] is False
     assert "inferred" in d["caveat"].lower()
+
+
+def test_reflectance_check_tolerates_a_single_empty_scene():
+    """An edge-of-orbit or fully-clouded scene carries no valid pixel over the
+    AOI. That is normal and must not abort the batch -- it cost 11% of the
+    Al Massira series when it did."""
+    good = np.full((1, 2, 2), 0.05, dtype="float32")
+    empty = np.full((1, 2, 2), np.nan, dtype="float32")
+    ds = xr.Dataset({
+        "B03": xr.DataArray(np.concatenate([empty, good]), dims=("time", "y", "x")),
+    })
+    checks.check_reflectance_range(ds, ["B03"], sample=2)  # must not raise
+
+
+def test_reflectance_check_still_fails_when_every_scene_is_empty():
+    ds = xr.Dataset({
+        "B03": xr.DataArray(np.full((2, 2, 2), np.nan, dtype="float32"),
+                            dims=("time", "y", "x")),
+    })
+    with pytest.raises(checks.SanityError, match="every one of"):
+        checks.check_reflectance_range(ds, ["B03"], sample=2)
+
+
+def test_reflectance_check_still_catches_a_bad_offset_past_an_empty_scene():
+    """The out-of-range test must survive being preceded by an empty scene."""
+    empty = np.full((1, 2, 2), np.nan, dtype="float32")
+    bad = np.full((1, 2, 2), -0.5, dtype="float32")
+    ds = xr.Dataset({
+        "B03": xr.DataArray(np.concatenate([empty, bad]), dims=("time", "y", "x")),
+    })
+    with pytest.raises(checks.SanityError, match="outside"):
+        checks.check_reflectance_range(ds, ["B03"], sample=2)
