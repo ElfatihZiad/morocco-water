@@ -475,3 +475,77 @@ it has no Wikipedia article in English or French. Sources place it on the upper
 Oum Er-Rbia near Zaouiat Ech Cheikh, ~50 km from Kasba Tadla, 740 Mm3 gross and
 ~473 Mm3 regulated, commissioned 2003 — but no verifiable coordinate was found. A
 mislabelled reservoir in a published dataset is worse than an absent one.
+
+---
+
+## 2026-11-19 — Flow topology by DEM routing, with a built-in validation gate
+
+**Decision:** resolve which reservoirs drain into Al Massira by D8 flow routing
+over `cop-dem-glo-90`, delineating Al Massira's catchment from its dam as a pour
+point and testing each other dam for membership.
+
+**Why it carries its own check.** The delineated catchment area must land near Al
+Massira's published ~35,000 km². If it does not, the routing is wrong and no
+membership result from that run may be used. `resolve()` returns
+`routing_validated` and records an explicit assumption when it fails.
+
+**The gate immediately earned its place.** The first run returned a catchment of
+**623 km² against 35,000 — 98% too small** — and reported all three reservoirs as
+outside the catchment. Had the check not been there, "Bin el Ouidane does not
+drain into Al Massira" would have been a confident, published, wrong answer that
+inverted the entire attribution.
+
+**Root cause: the pour-point snap.** The dam coordinate must be moved onto the
+trunk channel before delineation, and the first implementation snapped to any
+cell with accumulation above 20,000 cells. At 90 m that is only ~162 km² of
+upstream area, so the pour point landed on a minor side stream about 1 km away.
+
+**Fix:** snap to the **local maximum** of flow accumulation within a 5 km radius.
+This needs no threshold to be guessed and lands on the trunk by construction. The
+run now also reports the accumulation at the snapped cell, which should
+correspond to ~35,000 km² and so cross-checks the catchment mask against the
+accumulation grid independently, and the raw accumulation at each reservoir's own
+dam, which distinguishes a main-stem dam from a headwater one.
+
+**Lesson.** A validation gate is worth more than the analysis it guards. The
+expensive part here — DEM conditioning, routing — was correct; the cheap part, a
+magic-number threshold, was wrong, and only a comparison against an independent
+published quantity could tell the difference.
+
+---
+
+## 2026-11-19 — pysheds under NumPy 2: shim rather than pin
+
+pysheds 0.5 calls `np.in1d`, removed in NumPy 2.0. Pinning NumPy below 2 was
+rejected: xarray, odc-stac and the rest of the stack need 2.x.
+
+All nine call sites in `pysheds/sgrid.py` are the identical pattern
+`np.in1d(fdir.ravel(), dirmap).reshape(fdir.shape)`. The input is already 1-D, so
+`np.isin` is an exact drop-in rather than an approximation — verified by reading
+every occurrence, not assumed from the function's docstring. The shim is applied
+in `topology.py` before the pysheds import, with a test asserting the
+equivalence on an array containing an invalid flow direction.
+
+---
+
+## 2026-11-19 — Testing the 2022 offset: measure something that cannot change
+
+The pipeline reported a **-39.6% step in reservoir area across 2022-01-25**,
+which is genuinely ambiguous: the drought was collapsing through that window
+(2021 dry season 26.4 km², 2022 16.7 km²), so a real step of that size is
+expected. Asserting "it's just the drought" would be exactly the kind of
+unverified claim this project is supposed to avoid.
+
+**Design: `offset_demo.py`.** Measure the median NDWI over **stable land** just
+outside the reservoir's maximum extent — a quantity with no hydrological reason
+to change at an arbitrary processing date — for scenes either side of the
+boundary, computed three ways:
+
+1. offset resolved per item from its processing baseline (our pipeline);
+2. offset forced to zero (what a naive pipeline does);
+3. offset applied to every scene (over-correction).
+
+A step in arm 2 is pure artefact. Its absence in arm 1 is evidence the correction
+works, and arm 3 bounds the error in the other direction. The reservoir's own
+area cannot serve as the test statistic, because its change is confounded with
+the drought; land can.
