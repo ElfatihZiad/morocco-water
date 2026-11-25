@@ -1,5 +1,9 @@
 """Flow topology from the Copernicus DEM.
 
+Run with:
+    uv run python -m moroccowater.topology --target al_massira
+
+
 Answers one question that gates the whole cascade budget: which reservoirs
 actually drain into Al Massira? A reservoir downstream of it cannot contribute to
 its inflow, so assuming the wrong direction would invert the attribution.
@@ -332,3 +336,31 @@ def resolve(runlog: RunLog, target_slug: str = "al_massira") -> dict:
             "Membership results from this run must not be trusted."
         )
     return result
+
+
+def main() -> None:
+    import argparse
+    import json
+
+    p = argparse.ArgumentParser(description="Resolve reservoir flow topology.")
+    p.add_argument("--target", default="al_massira", choices=sorted(RESERVOIRS))
+    p.add_argument("--outdir", type=Path,
+                   default=Path(__file__).resolve().parents[2] / "data" / "processed")
+    p.add_argument("-v", "--verbose", action="store_true")
+    a = p.parse_args()
+    logging.basicConfig(level=logging.INFO if a.verbose else logging.WARNING,
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.getLogger("rasterio._err").setLevel(logging.ERROR)
+
+    runlog = RunLog(f"topology_{a.target}")
+    result = resolve(runlog, target_slug=a.target)
+    a.outdir.mkdir(parents=True, exist_ok=True)
+    (a.outdir / f"{a.target}_topology.json").write_text(
+        json.dumps(result, indent=2, default=str)
+    )
+    runlog.write(a.outdir / f"{a.target}_topology_provenance.json")
+    print(json.dumps(result, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()

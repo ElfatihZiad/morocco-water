@@ -626,3 +626,24 @@ caught only by an external published quantity. The diagnostic that mattered was
 not reading the code but asking the data where the accumulation maximum actually
 was — the answer (24 km east) immediately explained the failure and named the
 cause.
+
+---
+
+## 2026-11-24 — Runner scripts belong in the package, not the scratchpad
+
+Topology attempt 3 appeared to produce the identical result to attempt 2 —
+1,622 km², same 6.7 km snap shift. It had not run at all: the driver script lived
+in a session scratchpad that had since been cleared, so Python exited
+immediately, the old JSON stayed on disk, and the stale file read as a fresh
+result.
+
+**Fix:** `topology.py` now has its own `main()` and is run as
+`python -m moroccowater.topology`, like every other module here. No analysis step
+depends on a file outside version control.
+
+**Lesson.** The failure was not the missing script — that error was loud and
+immediate. It was that a stale output file was indistinguishable from a current
+one. Outputs that get overwritten in place need either a timestamp checked
+against the run, or deletion before the run. The run now writes
+`<target>_topology.json` through the CLI, and the stale copy was removed rather
+than left to be misread again.
