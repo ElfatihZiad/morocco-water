@@ -36,7 +36,13 @@ if not hasattr(np, "in1d"):  # pragma: no cover - environment shim
 
 from pysheds.grid import Grid  # noqa: E402 - must follow the NumPy 2 shim
 
-from .config import RESERVOIRS, STAC_URL, Reservoir
+from .aoi import isolate_reservoir
+from .config import (
+    COLLECTION_GSW,
+    RESERVOIRS,
+    STAC_URL,
+    Reservoir,
+)
 from .provenance import RunLog
 from .sentinel2 import open_catalog
 
@@ -133,6 +139,37 @@ def _to_grid_crs(lon: float, lat: float) -> tuple[float, float]:
     return tx.transform(lon, lat)
 
 
+def reservoir_mask_on_dem(
+    dem_path: Path, reservoir: Reservoir, runlog: RunLog
+) -> np.ndarray:
+    """The reservoir's maximum water extent, on the DEM's exact grid.
+
+    Loaded onto the DEM's geobox so the returned array is cell-for-cell aligned
+    with the pysheds grid -- no reindexing, no chance of a half-cell offset
+    between the water body and the flow grid.
+    """
+    dem = rioxarray.open_rasterio(dem_path).squeeze(drop=True)
+    geobox = dem.odc.geobox
+
+    items = list(
+        open_catalog().search(collections=[COLLECTION_GSW],
+                              bbox=list(reservoir.bbox)).items()
+    )
+    if not items:
+        raise RuntimeError(f"no {COLLECTION_GSW} items for bbox {reservoir.bbox}")
+
+    occ = odc_load(
+        items, bands=["occurrence"], geobox=geobox, resampling="nearest",
+        chunks={"x": 2048, "y": 2048}, patch_url=pc.sign,
+    )["occurrence"]
+    if "time" in occ.dims:
+        occ = occ.max("time")
+    occ = occ.where(occ != 255)  # GSW nodata
+    mask = (occ >= 5.0).fillna(False)
+    isolated = isolate_reservoir(mask, reservoir, runlog)
+    return np.asarray(isolated.values, dtype=bool)
+
+
 def accumulation_at(grid: Grid, acc: np.ndarray, reservoir: Reservoir) -> int | None:
     """Upstream cell count at a reservoir's dam cell, un-snapped.
 
@@ -148,41 +185,68 @@ def accumulation_at(grid: Grid, acc: np.ndarray, reservoir: Reservoir) -> int | 
 
 
 def snap_to_main_stem(
-    grid: Grid, acc: np.ndarray, reservoir: Reservoir, radius_m: float = 5000.0
+    grid: Grid,
+    acc: np.ndarray,
+    reservoir: Reservoir,
+    water_mask: np.ndarray | None = None,
+    radius_m: float = 5000.0,
 ) -> tuple[float, float, int, float]:
-    """Snap a dam coordinate to the highest-accumulation cell within a radius.
+    """Snap a dam coordinate to the highest-accumulation cell on its reservoir.
 
-    Snapping to "any cell above a threshold" is what produced a 623 km²
-    catchment for a basin whose published area is 35,000 km²: a 20,000-cell
-    threshold is only ~162 km² of upstream area at 90 m, so the pour point landed
-    on a minor side stream. Taking the LOCAL MAXIMUM of accumulation needs no
-    threshold to be guessed and lands on the trunk channel by construction.
+    Two earlier attempts got this wrong, and the reason is worth keeping:
+
+    1. Snapping to "any cell above 20,000 accumulated cells" gave a 623 km²
+       catchment for a 35,000 km² basin. At 90 m that threshold is only ~162 km²
+       of upstream area, so the pour point landed on a minor side stream.
+    2. Snapping to the local accumulation maximum within 5 km gave 1,622 km².
+       The Copernicus DEM is a SURFACE model, so the reservoir is a flat plane;
+       `resolve_flats` disperses flow across that plane instead of concentrating
+       it at the dam wall. The trunk's accumulation therefore peaks mid-lake --
+       for Al Massira, 24 km east of the wall, outside any sensible fixed radius.
+
+    So the pour point is chosen over the reservoir's own water mask: the cell on
+    the impounded body carrying the most upstream area. That is reservoir-size
+    adaptive, needs no radius guessed, and is where the trunk actually enters.
+    `radius_m` survives only as the fallback when no water mask is supplied.
     """
     x, y = _to_grid_crs(*reservoir.dam_lonlat)
     col, row = (~grid.affine) * (x, y)
     row, col = int(row), int(col)
-    rad = int(round(radius_m / DEM_RESOLUTION))
 
-    r0, r1 = max(row - rad, 0), min(row + rad + 1, acc.shape[0])
-    c0, c1 = max(col - rad, 0), min(col + rad + 1, acc.shape[1])
-    window = np.asarray(acc[r0:r1, c0:c1])
-    if window.size == 0:
-        raise ValueError(f"{reservoir.slug}: dam falls outside the DEM grid")
+    if water_mask is not None:
+        if water_mask.shape != acc.shape:
+            raise ValueError(
+                f"water mask {water_mask.shape} does not match the flow grid "
+                f"{acc.shape}; it must be loaded on the DEM's geobox"
+            )
+        if not water_mask.any():
+            raise ValueError(f"{reservoir.slug}: empty water mask")
+        candidate = np.where(water_mask, acc, -np.inf)
+    else:
+        rad = int(round(radius_m / DEM_RESOLUTION))
+        candidate = np.full_like(acc, -np.inf, dtype="float64")
+        r0, r1 = max(row - rad, 0), min(row + rad + 1, acc.shape[0])
+        c0, c1 = max(col - rad, 0), min(col + rad + 1, acc.shape[1])
+        candidate[r0:r1, c0:c1] = acc[r0:r1, c0:c1]
 
-    dr, dc = np.unravel_index(int(np.nanargmax(window)), window.shape)
-    best_row, best_col = r0 + int(dr), c0 + int(dc)
-    bx, by = grid.affine * (best_col + 0.5, best_row + 0.5)
+    best_row, best_col = np.unravel_index(int(np.nanargmax(candidate)), acc.shape)
+    bx, by = grid.affine * (int(best_col) + 0.5, int(best_row) + 0.5)
     shift = float(np.hypot(bx - x, by - y))
-    return float(bx), float(by), int(window[dr, dc]), shift
+    return float(bx), float(by), int(acc[best_row, best_col]), shift
 
 
 def delineate(
-    grid: Grid, fdir, acc, reservoir: Reservoir, radius_m: float = 5000.0
+    grid: Grid,
+    fdir,
+    acc,
+    reservoir: Reservoir,
+    water_mask: np.ndarray | None = None,
+    radius_m: float = 5000.0,
 ) -> dict:
-    """Delineate the upstream catchment of a reservoir's dam."""
+    """Delineate the upstream catchment of a reservoir."""
     acc_arr = np.asarray(acc)
     x_snap, y_snap, acc_cells, shift = snap_to_main_stem(
-        grid, acc_arr, reservoir, radius_m=radius_m
+        grid, acc_arr, reservoir, water_mask=water_mask, radius_m=radius_m
     )
 
     catch = grid.catchment(x=x_snap, y=y_snap, fdir=fdir, xytype="coordinate")
@@ -225,7 +289,8 @@ def resolve(runlog: RunLog, target_slug: str = "al_massira") -> dict:
     grid, fdir, acc = condition_and_route(dem_path)
 
     target = RESERVOIRS[target_slug]
-    main = delineate(grid, fdir, acc, target)
+    water = reservoir_mask_on_dem(dem_path, target, runlog)
+    main = delineate(grid, fdir, acc, target, water_mask=water)
     area = main["catchment_area_km2"]
 
     expected = AL_MASSIRA_CATCHMENT_KM2

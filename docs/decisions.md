@@ -549,3 +549,80 @@ A step in arm 2 is pure artefact. Its absence in arm 1 is evidence the correctio
 works, and arm 3 bounds the error in the other direction. The reservoir's own
 area cannot serve as the test statistic, because its change is confounded with
 the drought; land can.
+
+---
+
+## 2026-11-24 — RESULT: the 2022 offset is a real artefact, and the correction removes it
+
+`offset_demo.py` ran over 2021-04-25..2022-10-25 (96 solar days, baselines
+03.00 / 04.00 / 05.10, 52 days carrying the offset), measuring median NDWI over
+stable land outside the reservoir — a quantity with no hydrological reason to
+change at a processing date.
+
+| arm | land NDWI before | after | step |
+|---|---|---|---|
+| **corrected** (offset per item's baseline) | −0.2939 | −0.3057 | **−0.0118** |
+| **uncorrected** (offset ignored) | −0.2927 | −0.2270 | **+0.0658** |
+| **over-corrected** (offset applied to all) | −0.4581 | −0.3057 | **+0.1523** |
+
+**Findings.**
+
+1. **Ignoring the offset injects a spurious +0.066 NDWI step** at an arbitrary
+   processing date. Nothing physical happened on 2022-01-25; this is pure
+   artefact.
+2. **Our correction reduces it to −0.012**, about 5.6x smaller and at the level
+   of scene-to-scene noise. The correction works.
+3. **Over-correcting is worse than doing nothing** (+0.152), which is worth
+   knowing: applying −1000 to every scene — an easy mistake when back-filling an
+   archive — produces a larger artefact than ignoring the offset entirely.
+
+**Why it matters for the headline number.** NDWI is thresholded at 0 to classify
+water, so a 0.066 shift moves the land/water boundary wherever the index sits
+near zero — the shallow shoreline, which is exactly where a drawdown is measured.
+
+**And it settles the ambiguity.** The pipeline had reported a −39.6% step in
+*reservoir area* across the same boundary. Since the corrected land series is
+flat there, that area step is **hydrological, not radiometric** — it is the
+drought (2021 dry season 26.4 km² → 2022 16.7 km²), measured correctly. The
+discontinuity check was right to flag it and right not to raise.
+
+This is the deliverable for gap 3 in `docs/novelty.md`: none of the Moroccan
+Sentinel-2 studies reviewed discusses the baseline-04.00 offset, and it lands
+mid-drought on the most widely used public catalogue.
+
+---
+
+## 2026-11-24 — Pour-point selection, third attempt: over the water mask
+
+Two failures, both caught by the 35,000 km² validation gate rather than by
+inspection:
+
+| attempt | pour point rule | catchment |
+|---|---|---|
+| 1 | first cell with accumulation > 20,000 cells | 623 km² |
+| 2 | local accumulation maximum within 5 km | 1,622 km² |
+| 3 | maximum accumulation on the reservoir's water mask | (pending) |
+
+**Why attempt 2 failed, which is the interesting part.** Routing was never
+broken: the global accumulation maximum is 3,299,153 cells = **26,723 km²**,
+within the ±25% tolerance of the published 35,000 km². But it sits at
+(−7.3817, 32.4640) — **24 km east of the dam wall, mid-reservoir.**
+
+The cause is that `cop-dem-glo-90` is a *surface* model, so the impounded lake is
+a flat plane. `resolve_flats` disperses flow across that plane instead of
+concentrating it at the outlet, so the trunk's accumulation peaks where the river
+*enters* the reservoir, not at the wall. Measured from the dam, accumulation
+within 5 km is 1,622 km², within 15 km 1,782 km², and only at 40 km does it
+reach 26,723 km².
+
+**Fix:** choose the pour point as the highest-accumulation cell on the
+reservoir's own JRC GSW water mask, loaded on the DEM's geobox so it is
+cell-for-cell aligned with the flow grid. This is reservoir-size adaptive, needs
+no radius guessed, and is where the trunk actually enters. The radius rule
+survives only as a fallback.
+
+**Lesson.** Three wrong answers in a row, each internally consistent and each
+caught only by an external published quantity. The diagnostic that mattered was
+not reading the code but asking the data where the accumulation maximum actually
+was — the answer (24 km east) immediately explained the failure and named the
+cause.
